@@ -9,6 +9,8 @@
     first in the user PATH and runs `ncompass install --agent claude-code`.
     Needs no administrator rights, GitHub account or git credentials.
     Running it again replaces the program and keeps one PATH entry.
+    Without -Channel it downloads stable and ncompass keeps the saved channel;
+    -Channel stable or -Channel early also moves the person to that channel.
 
 .EXAMPLE
     irm https://raw.githubusercontent.com/Nexer-Colombia/ncompass-install/main/install.ps1 | iex
@@ -17,8 +19,9 @@
     & ([scriptblock]::Create((irm https://raw.githubusercontent.com/Nexer-Colombia/ncompass-install/main/install.ps1))) -Channel early
 #>
 param(
+    # Empty means stable without changing the saved channel (PowerShell does not validate defaults).
     [ValidateSet('stable', 'early')]
-    [string]$Channel = 'stable',
+    [string]$Channel = '',
     [string]$Repo = 'Nexer-Colombia/ncompass-install',
     # ponytail: test-only overrides (install_windows_test.go); keep the defaults.
     [string]$DownloadBase = 'https://github.com',
@@ -37,7 +40,7 @@ param(
     New-Item -ItemType Directory -Path $tmp | Out-Null
     try {
         # Download. Stable uses the latest-release redirect, which is not rate limited like the API.
-        if ($Channel -eq 'stable') {
+        if ($Channel -ne 'early') {
             $exeUrl = "$DownloadBase/$Repo/releases/latest/download/ncompass.exe"
             $shaUrl = "$exeUrl.sha256"
         } else {
@@ -51,7 +54,7 @@ param(
         }
         $exe = Join-Path $tmp 'ncompass.exe'
         $sha = Join-Path $tmp 'ncompass.exe.sha256'
-        Write-Host "Downloading ncompass ($Channel) from $Repo"
+        Write-Host ('Downloading ncompass ({0}) from {1}' -f $(if ($Channel) { $Channel } else { 'stable' }), $Repo)
         Invoke-WebRequest -UseBasicParsing -Uri $exeUrl -OutFile $exe
         Invoke-WebRequest -UseBasicParsing -Uri $shaUrl -OutFile $sha
 
@@ -104,9 +107,17 @@ param(
 
     # Run.
     # Continue: in PowerShell ISE a native program's stderr line is an error record and Stop would abort.
+    # try/catch: a program that cannot start (AppLocker, antivirus) leaves $LASTEXITCODE
+    # unchanged, and under `irm | iex` that is the caller's value, often 0.
     $ErrorActionPreference = 'Continue'
-    & (Join-Path $dir 'ncompass.exe') install --agent claude-code
-    $code = $LASTEXITCODE
+    $installArgs = @('install', '--agent', 'claude-code')
+    if ($Channel) { $installArgs += '--channel', $Channel }
+    try {
+        & (Join-Path $dir 'ncompass.exe') @installArgs
+        $code = $LASTEXITCODE
+    } catch {
+        throw "ncompass could not start, so ncompass install did not run: $_"
+    }
     $ErrorActionPreference = 'Stop'
     if ($code -ne 0) { throw "ncompass install failed with exit code $code." }
     Write-Host ''
